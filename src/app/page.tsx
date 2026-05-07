@@ -5,14 +5,18 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  let tournaments: Awaited<ReturnType<typeof prisma.tournament.findMany>> = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let tournaments: any[] = [];
   let riderCount = 0;
   let horseCount = 0;
   let entryCount = 0;
   let resultCount = 0;
-  let alerts: Awaited<ReturnType<typeof prisma.biosecurityAlert.findMany>> = [];
-  let recentRuns: Awaited<ReturnType<typeof prisma.run.findMany>> = [];
-  let notices: Awaited<ReturnType<typeof prisma.officialNotice.findMany>> = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let alerts: any[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let recentRuns: any[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let notices: any[] = [];
   let dbError: string | null = null;
 
   try {
