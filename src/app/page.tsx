@@ -5,21 +5,61 @@ import Link from "next/link";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [tournaments, riderCount, horseCount, entryCount, resultCount, alerts, recentRuns, notices] = await Promise.all([
-    prisma.tournament.findMany({ orderBy: { startDate: "desc" }, take: 4, include: { events: true } }),
-    prisma.rider.count(),
-    prisma.horse.count(),
-    prisma.entry.count(),
-    prisma.result.count(),
-    prisma.biosecurityAlert.findMany({ where: { resolvedAt: null }, take: 3 }),
-    prisma.run.findMany({
-      where: { isCompleted: true },
-      orderBy: { finishedAt: "desc" },
-      take: 5,
-      include: { event: true, entry: { include: { rider: true, horse: true } } },
-    }),
-    prisma.officialNotice.findMany({ orderBy: { postedAt: "desc" }, take: 3 }),
-  ]);
+  let tournaments: Awaited<ReturnType<typeof prisma.tournament.findMany>> = [];
+  let riderCount = 0;
+  let horseCount = 0;
+  let entryCount = 0;
+  let resultCount = 0;
+  let alerts: Awaited<ReturnType<typeof prisma.biosecurityAlert.findMany>> = [];
+  let recentRuns: Awaited<ReturnType<typeof prisma.run.findMany>> = [];
+  let notices: Awaited<ReturnType<typeof prisma.officialNotice.findMany>> = [];
+  let dbError: string | null = null;
+
+  try {
+    [tournaments, riderCount, horseCount, entryCount, resultCount, alerts, recentRuns, notices] = await Promise.all([
+      prisma.tournament.findMany({ orderBy: { startDate: "desc" }, take: 4, include: { events: true } }),
+      prisma.rider.count(),
+      prisma.horse.count(),
+      prisma.entry.count(),
+      prisma.result.count(),
+      prisma.biosecurityAlert.findMany({ where: { resolvedAt: null }, take: 3 }),
+      prisma.run.findMany({
+        where: { isCompleted: true },
+        orderBy: { finishedAt: "desc" },
+        take: 5,
+        include: { event: true, entry: { include: { rider: true, horse: true } } },
+      }),
+      prisma.officialNotice.findMany({ orderBy: { postedAt: "desc" }, take: 3 }),
+    ]);
+  } catch (e: unknown) {
+    dbError = e instanceof Error ? e.message : "Unknown database error";
+  }
+
+  if (dbError) {
+    return (
+      <div className="space-y-8">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-ink-500 mt-1">National Equestrian Tournament — operations at a glance.</p>
+        </div>
+        <Card>
+          <CardBody>
+            <div className="text-center py-8 space-y-3">
+              <div className="text-4xl">⚠️</div>
+              <h2 className="text-lg font-semibold text-ink-700">Database Connection Error</h2>
+              <p className="text-sm text-ink-500 max-w-md mx-auto">
+                Could not connect to the database. Please ensure DATABASE_URL is configured correctly in your environment variables.
+              </p>
+              <details className="text-xs text-ink-400 mt-2">
+                <summary className="cursor-pointer">Technical details</summary>
+                <pre className="mt-2 text-left bg-ink-50 p-3 rounded overflow-auto max-w-lg mx-auto">{dbError}</pre>
+              </details>
+            </div>
+          </CardBody>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -152,3 +192,4 @@ export default async function DashboardPage() {
     </div>
   );
 }
+
