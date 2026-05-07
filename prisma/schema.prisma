@@ -1,0 +1,466 @@
+// Equiwings GMS — National Equestrian Tournament Game Management System
+// Schema covers all 8 modules from the design doc.
+// SQLite for dev; swap provider to "postgresql" for prod.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 1 + 2: People, Horses, Identity
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Rider {
+  id              String   @id @default(cuid())
+  efiId           String   @unique // EFI Registration / Identity Number
+  firstName       String
+  lastName        String
+  dateOfBirth     DateTime
+  gender          String   // "M" | "F" | "X"
+  nationality     String   @default("IND")
+  email           String?
+  phone           String?
+  unitOrClub      String?
+  category        String   // "Senior" | "YoungRider" | "Junior" | "ChildrenI" | "ChildrenII"
+  efiIdRenewedAt  DateTime // ID must be renewed before 01 Aug each year
+  passportNumber  String?
+  isForeign       Boolean  @default(false)
+  nocOnFile       Boolean  @default(false) // for foreign riders
+  photoUrl        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  entries         Entry[]
+  riderPoints     RiderPointAward[]
+  waivers         Waiver[]
+  badges          Badge[]
+  ownedHorses     Horse[]   @relation("OwnedHorses")
+  trainedHorses   Horse[]   @relation("TrainedHorses")
+  spareHorseLinks SpareHorseDeclaration[]
+}
+
+model Horse {
+  id                String   @id @default(cuid())
+  efiHorseId        String   @unique
+  feiPassportNo     String?
+  registeredName    String
+  breed             String?
+  dateOfBirth       DateTime
+  microchip         String?  @unique
+  sex               String   // "Stallion" | "Mare" | "Gelding"
+  heightHandsX10    Int      // hands * 10 (e.g., 14.2hh = 142). Min 142 unshod for Tent Pegging.
+  heightCertOnFile  Boolean  @default(false)
+  ownerId           String?
+  trainerId         String?
+  trainerChangedAt  DateTime? // 30-day stand-down for Endurance after trainer change
+  endLogBookOnFile  Boolean  @default(false) // Endurance log book mandatory
+
+  owner             Rider?   @relation("OwnedHorses", fields: [ownerId], references: [id])
+  trainer           Rider?   @relation("TrainedHorses", fields: [trainerId], references: [id])
+
+  grades            HorseGrade[]
+  vetDocs           VetDocument[]
+  vetInspections    VetInspection[]
+  stallAssignments  StallAssignment[]
+  entries           Entry[]
+  spareDeclarations SpareHorseDeclaration[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// Per-discipline grade record. Source of truth for eligibility.
+model HorseGrade {
+  id            String   @id @default(cuid())
+  horseId       String
+  discipline    String   // "Dressage" | "ShowJumping" | "Eventing" | "Endurance" | "TentPegging"
+  grade         String   // e.g. "Preliminary", "Elementary", "GradeIII", "PrixStGeorges"
+  effectiveFrom DateTime @default(now())
+  // MER tracking — accumulated qualifying scores at this grade
+  merCount      Int      @default(0)
+  lastCompetedAt DateTime?
+  notes         String?
+
+  horse         Horse    @relation(fields: [horseId], references: [id], onDelete: Cascade)
+
+  @@unique([horseId, discipline])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 1 (cont.): Waivers, Badges, Zones
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Waiver {
+  id             String   @id @default(cuid())
+  riderId        String
+  documentType   String   // "Liability" | "AntiDoping" | "CodeOfConduct" | "AgeProof" | "EFIStatutes"
+  signedAt       DateTime @default(now())
+  signatureBlob  String?  // base64 image or hash; stored opaquely
+  documentUrl    String?
+  rider          Rider    @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  @@index([riderId, documentType])
+}
+
+model Badge {
+  id          String   @id @default(cuid())
+  riderId     String?
+  staffName   String?  // for non-rider personnel (officials, volunteers, vendors)
+  role        String   // "Rider" | "Trainer" | "Groom" | "Official" | "Volunteer" | "Media" | "VIP"
+  zoneAccess  String   // CSV of zone codes
+  qrCode      String   @unique
+  issuedAt    DateTime @default(now())
+  revokedAt   DateTime?
+  rider       Rider?   @relation(fields: [riderId], references: [id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 3: Veterinary
+// ─────────────────────────────────────────────────────────────────────────────
+
+model VetDocument {
+  id            String   @id @default(cuid())
+  horseId       String
+  type          String   // "Coggins" | "Influenza" | "HealthCert" | "FEIPassport" | "EnduranceLogBook"
+  issuedOn      DateTime
+  expiresOn     DateTime?
+  verifiedAt    DateTime?
+  verifiedById  String?
+  fileUrl       String?
+  horse         Horse    @relation(fields: [horseId], references: [id], onDelete: Cascade)
+  @@index([horseId, type])
+}
+
+model VetInspection {
+  id              String   @id @default(cuid())
+  horseId         String
+  eventId         String?
+  phase           String   // "TrotUp" | "VetGate" | "PostRide" | "PreCompetition"
+  inspectedAt     DateTime @default(now())
+  result          String   // "Pass" | "Fail" | "Represent" | "Eliminated" | "Withdrawn"
+  heartRateBpm   Int?
+  recoveryToTargetSec Int?
+  temperatureC    Float?
+  bodyConditionScore Float?
+  lamenessScore   Int?
+  notes           String?
+  horse           Horse    @relation(fields: [horseId], references: [id], onDelete: Cascade)
+  event           Event?   @relation(fields: [eventId], references: [id])
+}
+
+model BiosecurityAlert {
+  id          String   @id @default(cuid())
+  horseId     String
+  raisedAt    DateTime @default(now())
+  resolvedAt  DateTime?
+  reason      String
+  status      String   // "Open" | "Quarantine" | "Cleared"
+  raisedById  String?
+}
+
+model SpareHorseDeclaration {
+  id              String   @id @default(cuid())
+  riderId         String
+  spareHorseId    String
+  eventId         String?
+  declaredAt      DateTime @default(now())
+  usedAt          DateTime?
+  rider           Rider    @relation(fields: [riderId], references: [id])
+  spareHorse      Horse    @relation(fields: [spareHorseId], references: [id])
+  event           Event?   @relation(fields: [eventId], references: [id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stabling
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Stall {
+  id           String   @id @default(cuid())
+  block        String
+  stallNumber  String
+  isStallion   Boolean  @default(false) // designated stallion-only block
+  isQuarantine Boolean  @default(false)
+  isTack       Boolean  @default(false)
+  isFeed       Boolean  @default(false)
+  assignments  StallAssignment[]
+
+  @@unique([block, stallNumber])
+}
+
+model StallAssignment {
+  id         String   @id @default(cuid())
+  stallId    String
+  horseId    String
+  groomName  String?
+  fromAt     DateTime @default(now())
+  untilAt    DateTime?
+  stall      Stall    @relation(fields: [stallId], references: [id])
+  horse      Horse    @relation(fields: [horseId], references: [id])
+
+  @@index([stallId])
+  @@index([horseId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 4 + 5: Tournaments, Events, Entries, Scheduling, Scoring
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Tournament {
+  id          String   @id @default(cuid())
+  name        String
+  shortCode   String   @unique // "NEC2026", "JNEC2026"
+  startDate   DateTime
+  endDate     DateTime
+  venue       String?
+  isJNEC      Boolean  @default(false)
+  events      Event[]
+}
+
+model Event {
+  id              String   @id @default(cuid())
+  tournamentId    String
+  code            String   // "TP-ILN", "D-PSG", "SJ-GP", "EV-NOV"
+  name            String
+  discipline      String   // "TentPegging" | "Dressage" | "ShowJumping" | "Eventing" | "Endurance"
+  grade           String?  // grade or sub-event
+  isTeamEvent     Boolean  @default(false)
+  isHCAllowed     Boolean  @default(false)
+  isJunior        Boolean  @default(false)
+  scheduledStart  DateTime?
+  scheduledEnd    DateTime?
+  arenaOrTrack    String?
+  // Tent Pegging — speed and time-allowed (sec) for 80m run
+  speedMpm        Int?
+  timeAllowedMs   Int?     // store as ms to keep integer math; e.g. 6.40s = 6400
+  // Show Jumping — course params
+  minHeightCm     Int?
+  maxHeightCm     Int?
+  maxSpreadCm     Int?
+  speedMpmCourse  Int?
+  rounds          Int      @default(1)
+
+  tournament      Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  entries         Entry[]
+  runs            Run[]
+  vetInspections  VetInspection[]
+  spareDeclarations SpareHorseDeclaration[]
+  teams           Team[]
+  notices         OfficialNotice[]
+
+  @@unique([tournamentId, code])
+}
+
+model Entry {
+  id            String   @id @default(cuid())
+  eventId       String
+  riderId       String
+  horseId       String?  // nullable so team entries (no specific horse) still work
+  startNumber   Int?
+  isHC          Boolean  @default(false)
+  isWithdrawn   Boolean  @default(false)
+  isEliminated  Boolean  @default(false)
+  isNominated   Boolean  @default(false) // for riders entering >1 horse — first place counts
+  paidAt        DateTime?
+  feeMinor      Int?     // amount in minor units (paise)
+
+  event         Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  rider         Rider    @relation(fields: [riderId], references: [id])
+  horse         Horse?   @relation(fields: [horseId], references: [id])
+
+  runs          Run[]
+  scores        Score[]
+  teamMember    TeamMember?
+  result        Result?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([eventId, riderId, horseId])
+  @@index([eventId, startNumber])
+}
+
+model Team {
+  id            String   @id @default(cuid())
+  eventId       String
+  name          String
+  unitOrClub    String?
+  members       TeamMember[]
+  event         Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model TeamMember {
+  id            String   @id @default(cuid())
+  teamId        String
+  entryId       String   @unique
+  serialNo      Int      // for Indian File ordering
+  team          Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  entry         Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+}
+
+// A "Run" is one trip down the track or one round of jumping/dressage.
+// It exists for all disciplines; Score rows attach to a run.
+model Run {
+  id              String   @id @default(cuid())
+  eventId         String
+  entryId         String
+  roundNo         Int      @default(1)
+  runNo           Int      @default(1)
+  // Tent Pegging — peg sizes for this run
+  pegSizeCm       Int?     // 6 | 4 | 25 (= 2.5)
+  // Recorded time for Tent Pegging (ms across track)
+  recordedTimeMs  Int?
+  isTieBreak      Boolean  @default(false)
+  isCompleted     Boolean  @default(false)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+
+  event           Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  entry           Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  scores          Score[]
+
+  @@index([eventId, entryId])
+}
+
+// One score row can represent: a Tent Pegging target hit, a Dressage movement,
+// a Show Jumping fault. The `kind` field discriminates.
+model Score {
+  id            String   @id @default(cuid())
+  entryId       String
+  runId         String?
+  judgeId       String?
+  kind          String   // "TPTarget" | "DressageMovement" | "SJFault" | "EVPenalty" | "TimePenalty" | "Collective"
+  // Discipline-specific payload columns:
+  pointsAwarded Float?   // Tent Pegging targets (6/4/2/0); Dressage final (mark*coef); SJ negative for faults
+  rawMark       Float?   // Dressage raw 0-10 mark
+  coefficient   Float?   // Dressage coefficient (1 or 2)
+  movementNo    Int?     // Dressage movement index
+  obstacleNo    Int?     // SJ obstacle index
+  faultType     String?  // "Rail" | "Refusal" | "Fall" | "TimeFault" | "Run-out"
+  weapon        String?  // "Lance" | "Sword"
+  targetType    String?  // "Peg" | "Ring" | "Lemon"
+  targetResult  String?  // "Carry" | "Draw" | "Strike" | "Miss" | "Slice" | "Hit"
+  comments      String?
+  createdAt     DateTime @default(now())
+
+  entry         Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  run           Run?     @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+// Final, computed result per entry per event. Written by the scoring engine.
+model Result {
+  id              String   @id @default(cuid())
+  entryId         String   @unique
+  totalRaw        Float    // total marks before time penalties (Tent Pegging) or raw movement total (Dressage)
+  totalAfterPen   Float    // after time/error penalties
+  percentage      Float?   // Dressage %
+  timePenalty     Float?
+  rank            Int?
+  status          String   // "Completed" | "Eliminated" | "Withdrawn" | "DNS" | "DSQ"
+  meetsMER        Boolean  @default(false)
+  meetsMedal      Boolean  @default(false)
+  computedAt      DateTime @default(now())
+
+  entry           Entry    @relation(fields: [entryId], references: [id], onDelete: Cascade)
+}
+
+model RiderPointAward {
+  id          String   @id @default(cuid())
+  riderId     String
+  eventId     String
+  placement   Int      // 1..6
+  points      Int
+  awardedAt   DateTime @default(now())
+  validUntil  DateTime
+  rider       Rider    @relation(fields: [riderId], references: [id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 6: Officials
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Official {
+  id            String   @id @default(cuid())
+  efiPanelId    String?  @unique
+  firstName     String
+  lastName      String
+  email         String?
+  disciplines   String   // CSV
+  roles         String   // CSV — "PGJ" | "TechDelegate" | "DressageJudge" | "LaneJudge" | "Vet" | "Medical" | "Timer" | "Scorer" | "Steward" | "Scribe"
+  organisingEntity String? // for Tent Pegging NEC: must NOT match organising unit
+  createdAt     DateTime @default(now())
+  assignments   OfficialAssignment[]
+}
+
+model OfficialAssignment {
+  id          String   @id @default(cuid())
+  officialId  String
+  eventId     String
+  role        String
+  laneOrPosition String?
+  assignedAt  DateTime @default(now())
+  official    Official @relation(fields: [officialId], references: [id])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 7: Financials
+// ─────────────────────────────────────────────────────────────────────────────
+
+model FeeSchedule {
+  id            String   @id @default(cuid())
+  tournamentId  String
+  itemCode      String   // "BASE_ENTRY", "LATE_ENTRY", "HC_ENTRY", "SHAVINGS", "STALL_DAY", ...
+  description   String
+  amountMinor   Int      // paise
+  unit          String?  // "per_entry" | "per_day" | "per_bag"
+  @@unique([tournamentId, itemCode])
+}
+
+model Invoice {
+  id            String   @id @default(cuid())
+  riderId       String?
+  totalMinor    Int
+  status        String   // "Pending" | "Paid" | "Refunded" | "Cancelled"
+  createdAt     DateTime @default(now())
+  paidAt        DateTime?
+  lineItems     InvoiceLineItem[]
+}
+
+model InvoiceLineItem {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  itemCode    String
+  description String
+  quantity    Int      @default(1)
+  unitMinor   Int
+  totalMinor  Int
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module 8: Communications
+// ─────────────────────────────────────────────────────────────────────────────
+
+model OfficialNotice {
+  id           String   @id @default(cuid())
+  eventId      String?
+  title        String
+  body         String
+  category     String   // "Schedule" | "Weather" | "Vet" | "Track" | "Result" | "JuryDecision"
+  postedAt     DateTime @default(now())
+  postedById   String?
+  event        Event?   @relation(fields: [eventId], references: [id])
+}
+
+model Notification {
+  id           String   @id @default(cuid())
+  recipientId  String   // generic — could be rider, official, or staff id
+  recipientType String   // "Rider" | "Official" | "Volunteer" | "Broadcast"
+  channel      String   // "Push" | "SMS" | "PA" | "Email"
+  subject      String
+  body         String
+  sentAt       DateTime @default(now())
+  readAt       DateTime?
+}
