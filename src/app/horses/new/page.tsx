@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { prisma } from "@/lib/db";
 import { Card, CardBody, CardHeader, PageTitle, Button, Field, Input, Select, LinkButton } from "@/components/ui";
 import { createHorseAction } from "./actions";
